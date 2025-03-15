@@ -1,0 +1,72 @@
+const express = require("express");
+const axios = require("axios");
+const crypto = require("crypto");
+require("dotenv").config();
+
+const app = express();
+app.use(express.json());
+
+const PHONEPE_BASE_URL = "https://api-preprod.phonepe.com/apis/hermes"; // Sandbox URL
+const MERCHANT_ID = process.env.PHONEPE_MERCHANT_ID;
+const MERCHANT_KEY = process.env.PHONEPE_MERCHANT_KEY;
+const CALLBACK_URL = process.env.PHONEPE_CALLBACK_URL;
+const SALT_INDEX = 1; // Default value
+
+// Initiate Payment Route
+app.post("/initiate-payment", async (req, res) => {
+    try {
+        const { amount, userId } = req.body;
+        if (!amount || !userId) return res.status(400).json({ error: "Amount and User ID are required" });
+        
+        const payload = {
+            merchantId: MERCHANT_ID,
+            merchantTransactionId: `TXN_${Date.now()}`,
+            amount: amount * 100, // Convert to paisa
+            callbackUrl: CALLBACK_URL,
+            mobileNumber: "9999999999", // Optional
+            paymentInstrument: {
+                type: "UPI_INTENT"
+            }
+        };
+        
+        const jsonPayload = JSON.stringify(payload);
+        const checksum = crypto.createHash("sha256").update(jsonPayload + "" + MERCHANT_KEY).digest("hex") + "###" + SALT_INDEX;
+        
+        const response = await axios.post(
+            `${PHONEPE_BASE_URL}/pg/v1/pay`,
+            { request: Buffer.from(jsonPayload).toString("base64") },
+            {
+                headers: {
+                    "Content-Type": "application/json",
+                    "X-VERIFY": checksum,
+                }
+            }
+        );
+        
+        res.json(response.data);
+    } catch (error) {
+        res.status(500).json({ error: "Payment initiation failed", details: error.message });
+    }
+});
+
+// Verify Payment Status
+app.get("/verify-payment/:transactionId", async (req, res) => {
+    try {
+        const { transactionId } = req.params;
+        const checksum = crypto.createHash("sha256").update(`/pg/v1/status/${MERCHANT_ID}/${transactionId}` + "" + MERCHANT_KEY).digest("hex") + "###" + SALT_INDEX;
+        
+        const response = await axios.get(
+            `${PHONEPE_BASE_URL}/pg/v1/status/${MERCHANT_ID}/${transactionId}`,
+            {
+                headers: { "X-VERIFY": checksum }
+            }
+        );
+        
+        res.json(response.data);
+    } catch (error) {
+        res.status(500).json({ error: "Payment verification failed", details: error.message });
+    }
+});
+
+const PORT = process.env.PORT || 5000;
+app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
